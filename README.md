@@ -1,7 +1,7 @@
 # Website Visit Counter
 
 ## Overview
-This is my submission for the **Website Visit Counter** assignment. The project efficiently tracks page visits using caching strategies, Redis for global caching, and scalability techniques such as **sharding, batching, and consistent hashing**.
+The project efficiently tracks page visits using caching strategies, Redis for global caching, and scalability techniques such as **sharding, batching, and consistent hashing**.
 
 ## Features
 * **Basic Visit Counter**: Tracks visits to a page.
@@ -31,9 +31,6 @@ cd Website-Visit-Counter
 ```
 
 2. Set up environment variables (create a `.env` file in the root directory):
-```
-REDIS_NODES=redis://redis1:7070,redis://redis2:7071
-```
 
 3. Start the application and Redis instances using Docker:
 ```

@@ -4,7 +4,7 @@ import os
 
 class Settings(BaseSettings):
     # Redis Configuration
-    REDIS_NODES: str = ""  # Will be a comma-separated string of Redis nodes
+    REDIS_NODES: str = ""
     
     REDIS_PASSWORD: str = ""
     REDIS_DB: int = 0
