@@ -1,0 +1,187 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [starter]
+  push:
+    branches: [starter, devops-final]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  quality:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        run: pytest -q
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Scan the full history, not just the latest commit.
+          fetch-depth: 0
+
+      - name: Scan history for committed secrets
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.18.4 \
+            detect --source=/repo --no-banner --redact --verbose
+
+  chart:
+    name: Validate chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+
+      - name: Install kubeconform
+        run: |
+          curl -fsSL -o kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.4/kubeconform-linux-amd64.tar.gz
+          tar -xzf kubeconform.tar.gz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Lint chart
+        run: helm lint charts/visit-counter
+
+      - name: Render and validate against the Kubernetes API schemas
+        run: |
+          helm template visit-counter charts/visit-counter \
+            --namespace visit-counter \
+            --set image.tag=${{ github.sha }} \
+            | kubeconform -strict -summary -kubernetes-version 1.29.0 \
+                -schema-location default -verbose
+
+  image:
+    name: Build, scan and publish
+    needs: [quality, secrets, chart]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Compute image reference
+        id: meta
+        run: |
+          # GHCR needs a lowercase repository name.
+          repo=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=${REGISTRY}/${repo}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          # Load locally only; it gets pushed after the scan passes.
+          load: true
+          push: false
+          provenance: false
+          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.sha }}
+          build-args: |
+            GIT_SHA=${{ steps.meta.outputs.sha }}
+            APP_VERSION=0.1.0
+            BUILD_TIME=${{ steps.meta.outputs.build_time }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify the image reports the commit it was built from
+        run: |
+          actual=$(docker run --rm --entrypoint python \
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.sha }} \
+            -c "from app.core.config import settings; print(settings.GIT_SHA)")
+          echo "image reports GIT_SHA=$actual"
+          test "$actual" = "${{ steps.meta.outputs.sha }}"
+
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.sha }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          vuln-type: os,library
+
+      - name: Generate SBOM
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.sha }}
+          format: cyclonedx
+          output: sbom.cyclonedx.json
+          scanners: vuln
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ steps.meta.outputs.sha }}
+          path: sbom.cyclonedx.json
+          retention-days: 30
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image
+        id: push
+        if: github.event_name == 'push'
+        run: |
+          docker push ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.sha }}
+          digest=$(docker inspect --format='{{index .RepoDigests 0}}' \
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.sha }})
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "published $digest"
+
+      - name: Summarise
+        run: |
+          {
+            echo "### Build"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| commit | \`${{ github.sha }}\` |"
+            echo "| image tag | \`${{ steps.meta.outputs.sha }}\` |"
+            echo "| image | \`${{ steps.meta.outputs.image }}\` |"
+            echo "| published | ${{ github.event_name == 'push' && 'yes' || 'no (pull request)' }} |"
+            echo
+            echo "\`/version\` on the running pod must report \`${{ steps.meta.outputs.sha }}\`."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,32 +1,79 @@
-version: '3.8'
-
+# Local stack for running the app without a cluster.
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-local}
+        APP_VERSION: ${APP_VERSION:-0.0.0-dev}
+    image: visit-counter:local
     ports:
       - "8000:8000"
     environment:
-      - REDIS_NODES=redis://redis1:7070,redis://redis2:7071 
-      - DEBUG=true
+      REDIS_NODES: "redis://redis1:7070,redis://redis2:7071"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-devpassword}
+      FLUSH_INTERVAL_SECONDS: "30"
+      CACHE_TTL_SECONDS: "5"
+      LOG_LEVEL: "INFO"
+      DEBUG: "false"
     depends_on:
-      - redis1
-      - redis2
+      redis1:
+        condition: service_healthy
+      redis2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2).status == 200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    # Docker's default of 10s can SIGKILL the app before its shutdown flush
+    # finishes.
+    stop_grace_period: 30s
 
   redis1:
-    image: redis:7
+    image: redis:7.2.4-alpine
+    command:
+      - redis-server
+      - --port
+      - "7070"
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:-devpassword}
     ports:
       - "7070:7070"
     volumes:
       - redis1_data:/data
-    command: redis-server --port 7070 --appendonly yes
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 7070 -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-devpassword}
 
   redis2:
-    image: redis:7
+    image: redis:7.2.4-alpine
+    command:
+      - redis-server
+      - --port
+      - "7071"
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:-devpassword}
     ports:
       - "7071:7071"
     volumes:
       - redis2_data:/data
-    command: redis-server --port 7071 --appendonly yes
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 7071 -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-devpassword}
 
 volumes:
   redis1_data:

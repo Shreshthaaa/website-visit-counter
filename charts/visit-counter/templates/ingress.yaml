@@ -1,0 +1,31 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "visit-counter.fullname" . }}
+  labels:
+    {{- include "visit-counter.labels" . | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          # Only the API is exposed; /metrics and the probes stay in-cluster.
+          - path: {{ .Values.app.apiPrefix }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "visit-counter.fullname" . }}
+                port:
+                  name: http
+          {{- if .Values.ingress.exposeVersion }}
+          - path: /version
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "visit-counter.fullname" . }}
+                port:
+                  name: http
+          {{- end }}
+{{- end }}

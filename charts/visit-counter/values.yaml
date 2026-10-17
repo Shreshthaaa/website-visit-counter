@@ -1,0 +1,104 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: visit-counter
+  # Set to the git SHA on deploy (see the Makefile).
+  tag: local
+  pullPolicy: IfNotPresent
+
+# Ignored while autoscaling is enabled.
+replicaCount: 3
+
+app:
+  flushIntervalSeconds: 30
+  cacheTtlSeconds: 5
+  cacheMaxEntries: 10000
+  shutdownFlushTimeoutSeconds: 10
+  logLevel: INFO
+  apiPrefix: /api/v1
+  corsAllowOrigins: ""
+
+# preStopSleepSeconds + app.shutdownFlushTimeoutSeconds + some margin must
+# fit inside terminationGracePeriodSeconds, or buffered visits get killed
+# mid-flush.
+terminationGracePeriodSeconds: 45
+preStopSleepSeconds: 5
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    # No CPU limit on purpose, to avoid throttling.
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: true
+  className: nginx
+  # *.localtest.me resolves to 127.0.0.1 without touching /etc/hosts.
+  host: visit-counter.localtest.me
+  # Exposes the git SHA publicly; turn off if that matters.
+  exposeVersion: true
+
+networkPolicy:
+  # Not enforced by kind's default CNI.
+  enabled: true
+
+serviceAccount:
+  create: true
+  name: ""
+
+podAnnotations: {}
+
+redis:
+  image: redis:7.2.4-alpine
+
+  # Each entry is a separate shard (its own StatefulSet), not a replica.
+  # Adding one changes the hash ring, so existing keys need rebalancing.
+  shards:
+    - name: shard-a
+      port: 7070
+    - name: shard-b
+      port: 7071
+
+  auth:
+    # Name of a Secret created outside the chart. Preferred.
+    existingSecret: ""
+    secretKey: redis-password
+    # Dev only. Leave empty to have one generated on install.
+    password: ""
+
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClassName: ""
+
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      memory: 192Mi
+
+  # Appended to the generated redis.conf.
+  config: |
+    appendonly yes
+    appendfsync everysec
+    save 900 1
+    maxmemory-policy noeviction
+

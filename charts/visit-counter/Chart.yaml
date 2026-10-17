@@ -1,0 +1,7 @@
+apiVersion: v2
+name: visit-counter
+description: Sharded visit counter - FastAPI application with independent Redis shards
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/Shreshthaaa/website-visit-counter

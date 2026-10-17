@@ -1,168 +1,155 @@
-import os
-import redis
-from typing import Dict, List, Tuple, Any, Optional
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from urllib.parse import urlparse
+
+import redis.asyncio as aioredis
+from redis.asyncio.retry import Retry
+from redis.backoff import ExponentialBackoff
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
+
+from .config import Settings
 from .consistent_hash import ConsistentHash
-from .config import settings
-from bisect import bisect_left
+from .metrics import REDIS_OP_ERRORS, REDIS_OP_LATENCY, REDIS_SHARD_UP
+
+logger = logging.getLogger(__name__)
+
+# Kept under the readiness probe's timeout so a dead shard shows up as
+# "degraded" rather than the probe itself timing out.
+PING_TIMEOUT_SECONDS = 1.0
+
+
+def shard_label(node_url: str) -> str:
+    """Stable, low-cardinality label for a shard: host:port."""
+    parsed = urlparse(node_url)
+    if parsed.port:
+        return f"{parsed.hostname}:{parsed.port}"
+    return str(parsed.hostname)
+
+
+def shard_port(node_url: str) -> str:
+    parsed = urlparse(node_url)
+    return str(parsed.port) if parsed.port else "6379"
 
 
 class RedisManager:
+    """Owns one connection pool per Redis shard and routes keys between them.
 
-    MAX_POOL_CONNECTIONS = 200
+    Keys are never moved between shards here. Every replica builds one of
+    these, so a rebalance on startup would have them all racing each other.
+    """
 
-    def __init__(self):
-        """Initialize Redis connection pools and consistent hashing"""
-        redis_urls = os.getenv("REDIS_NODES").split(",") if os.getenv("REDIS_NODES") else ["redis://redis1:6379"]
-        self.connection_pools: Dict[str, redis.ConnectionPool] = {}
-        self.redis_clients: Dict[str, redis.Redis] = {}
-        self.consistent_hash = ConsistentHash()
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._clients: dict[str, aioredis.Redis] = {}
+        self.ring = ConsistentHash(virtual_nodes=settings.VIRTUAL_NODES)
 
-        for redis_url in redis_urls:
-            self.add_redis_instance(redis_url)
+        for node_url in settings.redis_nodes:
+            self._register(node_url)
 
-    def add_redis_instance(self, redis_url: str) -> None:
-        """
-        Add a new Redis instance to the manager
-        """
-        if redis_url in self.redis_clients:
+        if not self._clients:
+            raise ValueError("REDIS_NODES is empty; at least one shard is required")
+
+    def _register(self, node_url: str) -> None:
+        if node_url in self._clients:
             return
 
-        print(f"Adding Redis instance: {redis_url}")
-
-        # Creating Redis connection pool and Redis client
-        connection_pool = redis.ConnectionPool.from_url(
-            redis_url, decode_responses=True, max_connections=RedisManager.MAX_POOL_CONNECTIONS
+        self._clients[node_url] = aioredis.from_url(
+            node_url,
+            password=self._settings.REDIS_PASSWORD or None,
+            db=self._settings.REDIS_DB,
+            decode_responses=True,
+            max_connections=self._settings.REDIS_MAX_CONNECTIONS,
+            socket_timeout=self._settings.REDIS_SOCKET_TIMEOUT_SECONDS,
+            socket_connect_timeout=self._settings.REDIS_CONNECT_TIMEOUT_SECONDS,
+            retry=Retry(ExponentialBackoff(base=0.05, cap=0.5), retries=2),
+            retry_on_error=[RedisConnectionError, RedisTimeoutError],
+            health_check_interval=30,
         )
-        self.connection_pools[redis_url] = connection_pool
-        self.redis_clients[redis_url] = redis.Redis(connection_pool=connection_pool)
+        self.ring.add_node(node_url)
+        logger.info(
+            "redis shard registered",
+            extra={"extra_fields": {"shard": shard_label(node_url)}},
+        )
 
-        # Getting old state before adding node
-        old_keys = self.consistent_hash.sorted_keys.copy()
-        old_hash_ring = self.consistent_hash.hash_ring.copy()
-
-        # Adding node to consistent hash
-        self.consistent_hash.add_node(redis_url)
-
-        # Getting all keys except the ones in the new node
-        all_keys = list(set(self.get_all_keys()) - set(self.redis_clients[redis_url].keys()))
-
-        print(f"Keys: {all_keys}")
-
-        for key in all_keys:
-            node = self.consistent_hash.get_node(key)
-            if node != redis_url:
-                continue
-
-            hash_value = self.consistent_hash._hash(key)
-            idx = bisect_left(old_keys, hash_value) % len(old_keys)
-            old_node = old_hash_ring[old_keys[idx]]
-
-            print(f"Key: {key} is being migrated from {old_node} to {node}")
-
-            # Migrating the key from old node to new node
-            value = self.redis_clients[old_node].get(key)
-            if value is not None:
-                self.redis_clients[node].set(key, value)
-                self.redis_clients[old_node].delete(key)
-
-    def remove_redis_instance(self, redis_url: str) -> None:
-        """
-        Remove a Redis instance from the manager
-        """
-        if redis_url not in self.redis_clients:
-            return
-
-        if len(self.redis_clients) == 1:
-            print("Cannot remove the last Redis instance")
-            return
-
-        print(f"Removing Redis instance: {redis_url}")
-
-        old_keys = self.consistent_hash.sorted_keys.copy()
-        old_hash_ring = self.consistent_hash.hash_ring.copy()
-
-        self.consistent_hash.remove_node(redis_url)
-
-        all_keys = self.redis_clients[redis_url].keys()
-
-        print(f"Keys: {all_keys}")
-
-        for key in all_keys:
-            new_node = self.consistent_hash.get_node(key)
-            print(f"Key: {key} is being migrated from {redis_url} to {new_node}")
-
-            value = self.redis_clients[redis_url].get(key)
-            if value is not None:
-                self.redis_clients[new_node].set(key, value)
-                self.redis_clients[redis_url].delete(key)
-
-        # Remove Redis instance from manager
-        self.redis_clients.pop(redis_url)
-        self.connection_pools.pop(redis_url)
-
-    def get_all_keys(self) -> List[str]:
-        """
-        Get all keys from all Redis instances
-
-        Returns:
-            List of all keys
-        """
-        all_keys = []
-        for redis_client in self.redis_clients.values():
-            all_keys.extend(redis_client.keys())
-        return all_keys
-
-    def get_redis_node_from_key(self, key: str) -> str:
-        """
-        Get Redis node for the given key
-
-        Args:
-            key: The key to determine which Redis node to use
-
-        Returns:
-            Redis node for the key
-        """
-        return self.consistent_hash.get_node(key)
-
-    def get_connection(self, key: str) -> redis.Redis:
-        """
-        Get Redis connection for the given key using consistent hashing
-
-        Args:
-            key: The key to determine which Redis node to use
-
-        Returns:
-            Redis client for the appropriate node
-        """
-        node = self.consistent_hash.get_node(key)
+    def node_for(self, key: str) -> str:
+        node = self.ring.get_node(key)
         if node is None:
-            raise Exception("No Redis nodes available")
-        return self.redis_clients[node]
+            raise RuntimeError("no Redis shards available")
+        return node
 
-    async def increment(self, key: str, amount: int = 1) -> Optional[int]:
-        """
-        Increment a counter in Redis
+    def shard_label_for(self, key: str) -> str:
+        return shard_label(self.node_for(key))
 
-        Args:
-            key: The key to increment
-            amount: Amount to increment by
+    def shard_port_for(self, key: str) -> str:
+        # The API reports served_via as redis_<port>.
+        return shard_port(self.node_for(key))
 
-        Returns:
-            New value of the counter
-        """
-        redis_client = self.get_connection(key)
-        return redis_client.incr(key, amount)
+    def client_for(self, key: str) -> aioredis.Redis:
+        return self._clients[self.node_for(key)]
 
-    async def get(self, key: str) -> Optional[int]:
-        """
-        Get value for a key from Redis
+    @property
+    def shards(self) -> list[str]:
+        return list(self._clients)
 
-        Args:
-            key: The key to get
+    async def increment(self, key: str, amount: int = 1) -> int:
+        node_url = self.node_for(key)
+        label = shard_label(node_url)
+        started = time.perf_counter()
+        try:
+            result = await self._clients[node_url].incrby(key, amount)
+        except Exception:
+            REDIS_OP_ERRORS.labels(operation="incrby", shard=label).inc()
+            raise
+        REDIS_OP_LATENCY.labels(operation="incrby", shard=label).observe(
+            time.perf_counter() - started
+        )
+        return int(result)
 
-        Returns:
-            Value of the key or None if not found
-        """
-        redis_client = self.get_connection(key)
-        value = redis_client.get(key)
+    async def get_count(self, key: str) -> int | None:
+        node_url = self.node_for(key)
+        label = shard_label(node_url)
+        started = time.perf_counter()
+        try:
+            value = await self._clients[node_url].get(key)
+        except Exception:
+            REDIS_OP_ERRORS.labels(operation="get", shard=label).inc()
+            raise
+        REDIS_OP_LATENCY.labels(operation="get", shard=label).observe(time.perf_counter() - started)
         return int(value) if value is not None else None
+
+    async def ping_all(self) -> dict[str, bool]:
+        """Ping every shard concurrently. Used by readiness, never liveness."""
+        labels = [shard_label(node_url) for node_url in self._clients]
+        results = await asyncio.gather(
+            *(
+                asyncio.wait_for(client.ping(), timeout=PING_TIMEOUT_SECONDS)
+                for client in self._clients.values()
+            ),
+            return_exceptions=True,
+        )
+
+        status: dict[str, bool] = {}
+        for label, result in zip(labels, results, strict=True):
+            up = not isinstance(result, BaseException)
+            status[label] = up
+            REDIS_SHARD_UP.labels(shard=label).set(1 if up else 0)
+            if not up:
+                logger.warning(
+                    "redis shard ping failed",
+                    extra={"extra_fields": {"shard": label, "error": repr(result)}},
+                )
+        return status
+
+    async def aclose(self) -> None:
+        for node_url, client in self._clients.items():
+            try:
+                await client.aclose()
+            except Exception:
+                logger.warning(
+                    "error closing redis client",
+                    extra={"extra_fields": {"shard": shard_label(node_url)}},
+                )

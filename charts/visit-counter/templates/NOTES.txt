@@ -1,0 +1,34 @@
+{{ .Chart.Name }} {{ .Chart.Version }} deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Running version
+  image tag : {{ .Values.image.tag }}
+  verify    : kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "visit-counter.fullname" . }} -- \
+                python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/version').read().decode())"
+
+  git_sha should match the image tag above.
+
+Redis shards
+{{- range .Values.redis.shards }}
+  - {{ .name }} on port {{ .port }}
+{{- end }}
+  REDIS_NODES: {{ include "visit-counter.redisNodes" . }}
+
+Reach the service
+{{- if .Values.ingress.enabled }}
+  http://{{ .Values.ingress.host }}:8080/
+    (*.localtest.me resolves to 127.0.0.1; 8080 is kind's host mapping for :80)
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "visit-counter.fullname" . }} 8000:{{ .Values.service.port }}
+{{- end }}
+
+Record a visit, then read it back
+  curl -sX POST http://{{ .Values.ingress.host }}:8080{{ .Values.app.apiPrefix }}/counter/visit/homepage
+  curl -s      http://{{ .Values.ingress.host }}:8080{{ .Values.app.apiPrefix }}/counter/visits/homepage
+
+  served_via names the shard that answered; different page_ids should land on
+  different shards.
+
+{{- if .Values.networkPolicy.enabled }}
+
+NetworkPolicy is enabled, but kind's default CNI does not enforce it.
+{{- end }}

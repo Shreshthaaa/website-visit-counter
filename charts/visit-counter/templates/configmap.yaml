@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "visit-counter.fullname" . }}
+  labels:
+    {{- include "visit-counter.labels" . | nindent 4 }}
+data:
+  # REDIS_PASSWORD comes from the Secret, not from here.
+  REDIS_NODES: {{ include "visit-counter.redisNodes" . | quote }}
+  REDIS_DB: "0"
+  REDIS_MAX_CONNECTIONS: "200"
+  REDIS_SOCKET_TIMEOUT_SECONDS: "2.0"
+  REDIS_CONNECT_TIMEOUT_SECONDS: "2.0"
+  VIRTUAL_NODES: "100"
+  FLUSH_INTERVAL_SECONDS: {{ .Values.app.flushIntervalSeconds | quote }}
+  CACHE_TTL_SECONDS: {{ .Values.app.cacheTtlSeconds | quote }}
+  CACHE_MAX_ENTRIES: {{ .Values.app.cacheMaxEntries | quote }}
+  SHUTDOWN_FLUSH_TIMEOUT_SECONDS: {{ .Values.app.shutdownFlushTimeoutSeconds | quote }}
+  LOG_LEVEL: {{ .Values.app.logLevel | quote }}
+  API_PREFIX: {{ .Values.app.apiPrefix | quote }}
+  CORS_ALLOW_ORIGINS: {{ .Values.app.corsAllowOrigins | quote }}
+  DEBUG: "false"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "visit-counter.fullname" . }}-redis
+  labels:
+    {{- include "visit-counter.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+data:
+  redis.conf: |
+{{ .Values.redis.config | indent 4 }}
