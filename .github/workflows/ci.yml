@@ -128,23 +128,25 @@ jobs:
           echo "image reports GIT_SHA=$actual"
           test "$actual" = "${{ steps.meta.outputs.sha }}"
 
+      # 0.35.0 specifically: in March 2026 an attacker force-pushed 76 of
+      # this action's 77 tags to credential-stealing malware
+      # (GHSA-69fq-xp46-6x23). 0.35.0 is the one tag covered by immutable
+      # releases. A scanner is third-party code with access to this job.
       - name: Scan image for vulnerabilities
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.sha }}
           format: table
           exit-code: "1"
           severity: CRITICAL,HIGH
           ignore-unfixed: true
-          vuln-type: os,library
 
       - name: Generate SBOM
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.sha }}
           format: cyclonedx
           output: sbom.cyclonedx.json
-          scanners: vuln
 
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
