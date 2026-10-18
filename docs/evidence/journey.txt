@@ -1,0 +1,12 @@
+# journey
+# captured 2026-10-18 12:49:14Z
+# commit   3ee811c3f552
+
+=== A visit is recorded and read back through the ingress
+
+$ curl -fsS -X POST http://visit-counter.localtest.me:8080/api/v1/counter/visit/journey-1792327754
+{"status":"success","message":"Visit recorded for page journey-1792327754"}
+$ curl -fsS http://visit-counter.localtest.me:8080/api/v1/counter/visits/journey-1792327754
+{"count":0,"served_via":"redis_7071"}
+served_via names the Redis shard that answered, or 'in-memory' when
+the replica's own read cache was still valid.

@@ -1,0 +1,50 @@
+# workloads
+# captured 2026-10-18 12:50:02Z
+# commit   3ee811c3f552
+
+=== Workload shape and disruption budget
+
+$ kubectl -n visit-counter get deploy,sts,svc,ingress,hpa,pdb,pvc
+NAME                            READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/visit-counter   3/3     3            3           19h
+
+NAME                                           READY   AGE
+statefulset.apps/visit-counter-redis-shard-a   1/1     159m
+statefulset.apps/visit-counter-redis-shard-b   1/1     159m
+
+NAME                                  TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+service/visit-counter                 ClusterIP   10.96.31.157   <none>        80/TCP     20h
+service/visit-counter-redis-shard-a   ClusterIP   None           <none>        7070/TCP   20h
+service/visit-counter-redis-shard-b   ClusterIP   None           <none>        7071/TCP   20h
+
+NAME                                      CLASS   HOSTS                        ADDRESS     PORTS   AGE
+ingress.networking.k8s.io/visit-counter   nginx   visit-counter.localtest.me   localhost   80      20h
+
+NAME                                                REFERENCE                  TARGETS              MINPODS   MAXPODS   REPLICAS   AGE
+horizontalpodautoscaler.autoscaling/visit-counter   Deployment/visit-counter   cpu: <unknown>/70%   3         6         3          20h
+
+NAME                                       MIN AVAILABLE   MAX UNAVAILABLE   ALLOWED DISRUPTIONS   AGE
+poddisruptionbudget.policy/visit-counter   2               N/A               1                     19h
+
+NAME                                                       STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+persistentvolumeclaim/data-visit-counter-redis-shard-a-0   Bound    pvc-240d5d93-4e7a-4faf-80ee-e3e422cd1efc   1Gi        RWO            standard       <unset>                 20h
+persistentvolumeclaim/data-visit-counter-redis-shard-b-0   Bound    pvc-1e494f9e-cbaa-4790-b1b7-a9ce2020cc0b   1Gi        RWO            standard       <unset>                 20h
+
+The PDB matches 3 app pods, not the Redis pods: allowed disruptions
+is 1 against minAvailable 2.
+
+$ kubectl -n visit-counter get pods -L app.kubernetes.io/component
+NAME                             READY   STATUS        RESTARTS   AGE    COMPONENT
+visit-counter-7b66b8c648-bmvkd   1/1     Terminating   0          22s    api
+visit-counter-7cd9c67559-76d7x   1/1     Running       0          8s     api
+visit-counter-7cd9c67559-b4qvs   1/1     Running       0          10s    api
+visit-counter-7cd9c67559-hptv6   1/1     Running       0          13s    api
+visit-counter-redis-shard-a-0    1/1     Running       0          160m   redis
+visit-counter-redis-shard-b-0    1/1     Running       0          160m   redis
+
+Each shard is its own StatefulSet with its own volume:
+
+$ kubectl -n visit-counter get pvc
+NAME                                 STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+data-visit-counter-redis-shard-a-0   Bound    pvc-240d5d93-4e7a-4faf-80ee-e3e422cd1efc   1Gi        RWO            standard       <unset>                 20h
+data-visit-counter-redis-shard-b-0   Bound    pvc-1e494f9e-cbaa-4790-b1b7-a9ce2020cc0b   1Gi        RWO            standard       <unset>                 20h
