@@ -1,0 +1,34 @@
+# chaos
+# captured 2026-10-18 12:49:25Z
+# commit   3ee811c3f552
+
+=== Visits survive every replica being killed mid-buffer
+This is the regression the graceful-shutdown work exists to prevent.
+On the baseline these visits are lost: the buffer is in memory and
+nothing flushes it on SIGTERM.
+
+Sending 40 visits to chaos-1792327765, then deleting the pods immediately,
+well inside the 30s flush interval.
+
+$ kubectl -n visit-counter get pods -l app.kubernetes.io/component=api
+NAME                             READY   STATUS    RESTARTS   AGE
+visit-counter-7cd9c67559-4jchk   1/1     Running   0          5m54s
+visit-counter-7cd9c67559-pltgr   1/1     Running   0          5m57s
+visit-counter-7cd9c67559-sqhc5   1/1     Running   0          6m
+
+$ kubectl -n visit-counter delete pod -l app.kubernetes.io/instance=visit-counter,app.kubernetes.io/component=api --wait=true
+pod "visit-counter-7cd9c67559-4jchk" deleted from visit-counter namespace
+pod "visit-counter-7cd9c67559-pltgr" deleted from visit-counter namespace
+pod "visit-counter-7cd9c67559-sqhc5" deleted from visit-counter namespace
+
+$ kubectl -n visit-counter rollout status deploy/visit-counter --timeout=120s
+deployment "visit-counter" successfully rolled out
+
+Count after every replica was replaced (expect 40):
+
+$ curl -fsS http://visit-counter.localtest.me:8080/api/v1/counter/visits/chaos-1792327765
+{"count":40,"served_via":"redis_7071"}
+
+$ kubectl -n visit-counter logs -l app.kubernetes.io/component=api --tail=400 --prefix 2>/dev/null | grep -c 'shutdown flush complete' || true
+0
+^ pods that logged a completed shutdown flush

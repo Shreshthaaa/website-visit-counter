@@ -1,0 +1,14 @@
+# sharding
+# captured 2026-10-18 12:49:14Z
+# commit   3ee811c3f552
+
+=== Keys are distributed across both shards by the hash ring
+alpha      {"count":3,"served_via":"redis_7071"}
+beta       {"count":3,"served_via":"redis_7070"}
+gamma      {"count":2,"served_via":"redis_7070"}
+delta      {"count":3,"served_via":"redis_7071"}
+epsilon    {"count":1,"served_via":"redis_7070"}
+zeta       {"count":0,"served_via":"redis_7071"}
+
+Both redis_7070 and redis_7071 should appear. A single shard for every
+key would mean the ring is not distributing.

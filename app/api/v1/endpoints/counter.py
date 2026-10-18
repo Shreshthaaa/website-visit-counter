@@ -1,41 +1,46 @@
-from fastapi import APIRouter, HTTPException, Depends
-from typing import Dict, Any
-from ....core.redis_manager import RedisManager
-from ....services.visit_counter import VisitCounterService
+from __future__ import annotations
+
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+
 from ....schemas.counter import VisitCount
- 
+from ....services.visit_counter import VisitCounterService
+
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
- 
-# redis manager instance
-redis_manager = RedisManager()
- 
-# VisitCounterService instance
-visit_counter_service = VisitCounterService(redis_manager = redis_manager)
- 
-# Dependency to get VisitCounterService instance
-def get_visit_counter_service():
-    return visit_counter_service
- 
+
+
+def get_visit_counter_service(request: Request) -> VisitCounterService:
+    return request.app.state.service
+
+
 @router.post("/visit/{page_id}")
 async def record_visit(
     page_id: str,
-    counter_service: VisitCounterService = Depends(get_visit_counter_service)
+    counter_service: VisitCounterService = Depends(get_visit_counter_service),
 ):
-    """Record a visit for a website"""
+    """Record a visit for a page."""
     try:
         await counter_service.increment_visit(page_id)
-        return {"status": "success", "message": f"Visit recorded for page {page_id}"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
- 
+    except Exception:
+        logger.exception("failed to record visit", extra={"extra_fields": {"page_id": page_id}})
+        raise HTTPException(status_code=500, detail="failed to record visit") from None
+
+    return {"status": "success", "message": f"Visit recorded for page {page_id}"}
+
+
 @router.get("/visits/{page_id}", response_model=VisitCount)
 async def get_visits(
     page_id: str,
-    counter_service: VisitCounterService = Depends(get_visit_counter_service)
+    counter_service: VisitCounterService = Depends(get_visit_counter_service),
 ):
-    """Get visit count for a website"""
+    """Return the visit count for a page, and where the value came from."""
     try:
-        result = await counter_service.get_visit_count(page_id)
-        return VisitCount(count=result[0], served_via=result[1])
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        count, served_via = await counter_service.get_visit_count(page_id)
+    except Exception:
+        logger.exception("failed to read visits", extra={"extra_fields": {"page_id": page_id}})
+        raise HTTPException(status_code=500, detail="failed to read visit count") from None
+
+    return VisitCount(count=count, served_via=served_via)

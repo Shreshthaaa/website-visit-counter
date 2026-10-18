@@ -1,1 +1,1 @@
-"""Version 1 of the visit counter API.""" 
+"""Endpoints for version 1 of the API."""

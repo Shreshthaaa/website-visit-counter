@@ -1,0 +1,116 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+{{- $route := printf "%s/counter/visits/{page_id}" .Values.app.apiPrefix }}
+{{- $objective := .Values.monitoring.slo.objective }}
+{{- $threshold := .Values.monitoring.slo.latencyBucket }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "visit-counter.fullname" . }}
+  labels:
+    {{- include "visit-counter.labels" . | nindent 4 }}
+    release: {{ .Values.monitoring.prometheusRelease }}
+spec:
+  groups:
+    # SLI is the share of reads inside the latency bucket, not an average:
+    # an average hides the slow tail.
+    - name: visit-counter.slo
+      rules:
+        - record: visit_counter:read_fast_ratio:rate5m
+          expr: |
+            sum(rate(visit_counter_http_request_duration_seconds_bucket{route="{{ $route }}",le="{{ $threshold }}"}[5m]))
+            /
+            sum(rate(visit_counter_http_request_duration_seconds_count{route="{{ $route }}"}[5m]))
+
+        - record: visit_counter:read_fast_ratio:rate30m
+          expr: |
+            sum(rate(visit_counter_http_request_duration_seconds_bucket{route="{{ $route }}",le="{{ $threshold }}"}[30m]))
+            /
+            sum(rate(visit_counter_http_request_duration_seconds_count{route="{{ $route }}"}[30m]))
+
+        - record: visit_counter:read_fast_ratio:rate2h
+          expr: |
+            sum(rate(visit_counter_http_request_duration_seconds_bucket{route="{{ $route }}",le="{{ $threshold }}"}[2h]))
+            /
+            sum(rate(visit_counter_http_request_duration_seconds_count{route="{{ $route }}"}[2h]))
+
+        # Error budget spend as a multiple of the sustainable rate.
+        # 1 means the budget lasts exactly its window.
+        - record: visit_counter:read_budget_burn:rate5m
+          expr: (1 - visit_counter:read_fast_ratio:rate5m) / {{ subf 1.0 $objective | printf "%.4f" }}
+
+        - record: visit_counter:read_budget_burn:rate30m
+          expr: (1 - visit_counter:read_fast_ratio:rate30m) / {{ subf 1.0 $objective | printf "%.4f" }}
+
+        - record: visit_counter:read_budget_burn:rate2h
+          expr: (1 - visit_counter:read_fast_ratio:rate2h) / {{ subf 1.0 $objective | printf "%.4f" }}
+
+    - name: visit-counter.alerts
+      rules:
+        # Two windows: the short one reacts, the long one stops it flapping.
+        # 5m/30m and 30m/2h rather than the usual 1h/6h, because a cluster
+        # that has been up an hour cannot evaluate a 6h window.
+        - alert: VisitCounterReadLatencyBurnFast
+          expr: |
+            visit_counter:read_budget_burn:rate5m > 14.4
+            and
+            visit_counter:read_budget_burn:rate30m > 14.4
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: Read latency error budget burning 14x too fast
+            description: >-
+              Fewer than {{ mulf $objective 100 | printf "%.0f" }}% of reads
+              completed within {{ $threshold }}s.
+            action: >-
+              Check visit_counter_redis_operation_seconds for a slow shard and
+              visit_counter_buffer_depth for a flush backlog. A slow shard also
+              shows up as degraded in /readyz.
+
+        - alert: VisitCounterReadLatencyBurnSlow
+          expr: |
+            visit_counter:read_budget_burn:rate30m > 6
+            and
+            visit_counter:read_budget_burn:rate2h > 6
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Read latency error budget burning 6x too fast
+            description: Slower regression. Ticket, not a page.
+
+        # A lost visit cannot be reconstructed, so this is worth knowing
+        # immediately even though it is not a symptom alert.
+        - alert: VisitCounterVisitsLost
+          expr: increase(visit_counter_visits_lost_total[10m]) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: Buffered visits were discarded
+            description: >-
+              A shutdown flush timed out and dropped counts. Check that
+              SHUTDOWN_FLUSH_TIMEOUT_SECONDS still fits inside
+              terminationGracePeriodSeconds, and that Redis was reachable.
+
+        - alert: VisitCounterShardDown
+          expr: visit_counter_redis_shard_up == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: Redis shard {{ "{{ $labels.shard }}" }} is unreachable
+            description: >-
+              Keys hashing to this shard cannot be read or written. The other
+              shard is unaffected and readiness reports degraded, not down.
+
+        - alert: VisitCounterFlushBacklog
+          expr: visit_counter_buffer_depth > {{ .Values.monitoring.alerts.bufferDepthThreshold }}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Write buffer is not draining
+            description: >-
+              Visits are accumulating in memory faster than they reach Redis.
+              This is what would be lost if the pod died now.
+{{- end }}

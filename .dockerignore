@@ -1,0 +1,38 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Version control and CI
+.git
+.github
+.gitignore
+
+# Local tooling and caches
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+
+# Editors
+.vscode
+.idea
+.DS_Store
+
+# Others
+tests
+docs
+charts
+kind
+Makefile
+README.md
+docker-compose*.yml
+requirements-dev.txt

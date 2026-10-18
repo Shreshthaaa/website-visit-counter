@@ -1,0 +1,16 @@
+{{- if .Values.monitoring.dashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "visit-counter.fullname" . }}-dashboard
+  labels:
+    {{- include "visit-counter.labels" . | nindent 4 }}
+    # The Grafana sidecar loads any ConfigMap carrying this label, so the
+    # dashboard ships and versions with the application.
+    {{ .Values.monitoring.dashboard.label }}: "1"
+data:
+  # Loaded from a file rather than inlined: Grafana legends use {{ "{{label}}" }},
+  # which Helm would otherwise try to evaluate as a template.
+  visit-counter.json: |
+{{ .Files.Get "dashboards/visit-counter.json" | indent 4 }}
+{{- end }}

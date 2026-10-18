@@ -1,0 +1,28 @@
+# observability
+# captured 2026-10-18 12:50:03Z
+# commit   3ee811c3f552
+
+=== SLO and alert rules, read from Prometheus
+
+$ python3 scripts/observe.py slo
+
+SLO: 99% of count reads answered within 200ms
+
+  reads under 200ms    100.0000%
+  error budget burn    0.00x  (alerts above 14.4x)
+  p95 latency          5.4 ms
+  visits buffered      0  (lost if every pod died now)
+
+
+$ python3 scripts/observe.py alerts
+
+5 alert rules loaded and evaluating
+
+  VisitCounterFlushBacklog         warning   inactive
+  VisitCounterReadLatencyBurnFast  critical  inactive
+  VisitCounterReadLatencyBurnSlow  warning   inactive
+  VisitCounterShardDown            critical  inactive
+  VisitCounterVisitsLost           critical  inactive
+
+Nothing firing. 'inactive' means the rule is evaluating and healthy.
+

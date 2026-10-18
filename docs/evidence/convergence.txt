@@ -1,0 +1,19 @@
+# convergence
+# captured 2026-10-18 12:49:14Z
+# commit   3ee811c3f552
+
+=== Counts converge within the flush interval, across replicas
+Replicas: 3
+
+Sending 30 visits to converge-1792327754 ...
+
+Reads are taken every 5s. The first is expected to be short of 30:
+the Service round-robins, so the visits are buffered across replicas
+and a read only sees Redis plus the buffer of whichever replica
+answered it.
+
+  t+0   s  count=7
+  t+5   s  count=17
+  t+10  s  count=30
+
+Converged to 30. The window is bounded by FLUSH_INTERVAL_SECONDS.

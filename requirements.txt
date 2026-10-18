@@ -1,7 +1,11 @@
-fastapi==0.109.2
-uvicorn==0.27.1
-redis==5.0.1
+fastapi==0.143.3
+# Pinned explicitly: fastapi only requires starlette>=0.46.0, which still
+# allows the versions carrying CVE-2024-47874, CVE-2026-48818 and
+# CVE-2026-54283.
+starlette==1.8.0
+uvicorn[standard]==0.34.0
+redis==5.2.1
 python-dotenv==1.0.1
-pydantic==2.6.1
-pydantic-settings==2.1.0
-httpx==0.26.0 
+pydantic==2.10.6
+pydantic-settings==2.7.1
+prometheus-client==0.21.1

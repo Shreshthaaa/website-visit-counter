@@ -1,0 +1,19 @@
+# version
+# captured 2026-10-18 12:49:14Z
+# commit   3ee811c3f552
+
+=== Commit, image tag and running pod all report the same SHA
+
+$ git rev-parse --short=12 HEAD
+3ee811c3f552
+
+$ git log -1 --format='%H %s'
+3ee811c3f55234226a69530723aa80c856ffa2f4 feat(observability): HTTP metrics, SLO with burn-rate alerts, Grafana dashboard
+
+$ kubectl -n visit-counter get deploy/visit-counter -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+visit-counter:3ee811c3f552
+
+$ curl -fsS http://visit-counter.localtest.me:8080/version
+{"version":"0.1.0","git_sha":"3ee811c3f552"}
+The git SHA, the image tag and git_sha from the live pod are one string.
+That is what makes a deployed version traceable back to source.

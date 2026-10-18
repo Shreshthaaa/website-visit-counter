@@ -1,0 +1,69 @@
+{{- if .Values.networkPolicy.enabled }}
+# kindnet (kind's default CNI) ignores NetworkPolicy; these only take effect
+# on a CNI that enforces them.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "visit-counter.fullname" . }}-redis
+  labels:
+    {{- include "visit-counter.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  # Only the app pods may reach Redis.
+  podSelector:
+    matchLabels:
+      {{- include "visit-counter.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "visit-counter.apiSelectorLabels" . | nindent 14 }}
+      ports:
+        {{- range .Values.redis.shards }}
+        - protocol: TCP
+          port: {{ .port }}
+        {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "visit-counter.fullname" . }}-app
+  labels:
+    {{- include "visit-counter.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "visit-counter.apiSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Any source, so the chart doesn't depend on the ingress controller's labels.
+    - ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Redis shards
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "visit-counter.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: redis
+      ports:
+        {{- range .Values.redis.shards }}
+        - protocol: TCP
+          port: {{ .port }}
+        {{- end }}
+{{- end }}

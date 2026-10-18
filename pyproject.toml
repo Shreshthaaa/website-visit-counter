@@ -1,0 +1,28 @@
+[project]
+name = "visit-counter"
+version = "0.1.0"
+# Same as the python:3.11-slim base image.
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S"]
+ignore = [
+    "S101",  # assert is the point in tests
+    "B008",  # FastAPI's Depends() in defaults is the documented idiom
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106"]
+# Operator tooling, not shipped in the image: it deliberately shells out to
+# kubectl and talks to a hardcoded localhost port-forward.
+"scripts/*" = ["S310", "S603", "S607"]

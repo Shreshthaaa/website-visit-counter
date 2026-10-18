@@ -1,0 +1,49 @@
+# security
+# captured 2026-10-18 12:50:02Z
+# commit   3ee811c3f552
+
+=== Runtime security posture, read from the live cluster
+
+$ kubectl -n visit-counter get deploy/visit-counter -o jsonpath='{.spec.template.spec.securityContext}{"\n"}'
+{"fsGroup":10001,"runAsGroup":10001,"runAsNonRoot":true,"runAsUser":10001,"seccompProfile":{"type":"RuntimeDefault"}}
+
+$ kubectl -n visit-counter get deploy/visit-counter -o jsonpath='{.spec.template.spec.containers[0].securityContext}{"\n"}'
+{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true}
+
+Running as a non-root uid:
+
+$ kubectl -n visit-counter exec deploy/visit-counter -- id
+uid=10001(app) gid=10001(app) groups=10001(app)
+
+Root filesystem is read-only (this write must fail):
+
+$ kubectl -n visit-counter exec deploy/visit-counter -- sh -c 'echo test > /proof 2>&1 || echo "write refused, as expected"'
+sh: 1: cannot create /proof: Read-only file system
+write refused, as expected
+
+No package manager in the image (removed in the runtime stage):
+
+$ kubectl -n visit-counter exec deploy/visit-counter -- sh -c 'ls /opt/venv/lib/python3.11/site-packages | grep -E "^(pip|setuptools|wheel)$" || echo "pip, setuptools and wheel are absent"'
+pip, setuptools and wheel are absent
+
+No service account token is mounted:
+
+$ kubectl -n visit-counter exec deploy/visit-counter -- sh -c 'ls /var/run/secrets/kubernetes.io/ 2>&1 || echo "no token mounted"'
+ls: cannot access '/var/run/secrets/kubernetes.io/': No such file or directory
+no token mounted
+
+The Redis password is a Secret, and is not in the ConfigMap:
+
+$ kubectl -n visit-counter get configmap visit-counter -o yaml | grep -ci password || echo '0 occurrences in the ConfigMap'
+0
+0 occurrences in the ConfigMap
+
+$ kubectl -n visit-counter get secret visit-counter-redis -o jsonpath='{.data}' | python3 -c 'import json,sys; print("secret keys:", list(json.load(sys.stdin)))'
+secret keys: ['redis-password']
+
+NetworkPolicies exist. NOTE: kind's CNI does not enforce them.
+
+$ kubectl -n visit-counter get netpol
+NAME                  POD-SELECTOR                                                                                                      AGE
+visit-counter-app     app.kubernetes.io/component=api,app.kubernetes.io/instance=visit-counter,app.kubernetes.io/name=visit-counter     20h
+visit-counter-redis   app.kubernetes.io/component=redis,app.kubernetes.io/instance=visit-counter,app.kubernetes.io/name=visit-counter   20h

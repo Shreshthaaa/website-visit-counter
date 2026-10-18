@@ -1,0 +1,156 @@
+{{- $root := . }}
+{{- range .Values.redis.shards }}
+{{- $name := include "visit-counter.shardName" (dict "root" $root "shard" .) }}
+---
+# Headless, so <name>-0.<name> resolves straight to the shard's pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "visit-counter.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: redis
+    visit-counter.io/shard: {{ .name }}
+spec:
+  clusterIP: None
+  ports:
+    - name: redis
+      port: {{ .port }}
+      targetPort: redis
+      protocol: TCP
+  selector:
+    {{- include "visit-counter.selectorLabels" $root | nindent 4 }}
+    app.kubernetes.io/component: redis
+    visit-counter.io/shard: {{ .name }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "visit-counter.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: redis
+    visit-counter.io/shard: {{ .name }}
+spec:
+  # Always 1. Shards are added through redis.shards, not by scaling this.
+  replicas: 1
+  serviceName: {{ $name }}
+  selector:
+    matchLabels:
+      {{- include "visit-counter.selectorLabels" $root | nindent 6 }}
+      app.kubernetes.io/component: redis
+      visit-counter.io/shard: {{ .name }}
+  template:
+    metadata:
+      labels:
+        {{- include "visit-counter.labels" $root | nindent 8 }}
+        app.kubernetes.io/component: redis
+        visit-counter.io/shard: {{ .name }}
+      annotations:
+        checksum/redis-config: {{ $root.Values.redis.config | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        # The redis user from the official image.
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: {{ $root.Values.redis.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+          args:
+            # Password goes in the config file so it doesn't show up in ps.
+            - |
+              set -eu
+              umask 077
+              printf 'requirepass %s\n' "$REDIS_PASSWORD" > /tmp/redis.conf
+              cat /etc/redis/redis.conf >> /tmp/redis.conf
+              exec redis-server /tmp/redis.conf --port {{ .port }} --dir /data
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "visit-counter.redisSecretName" $root }}
+                  key: {{ $root.Values.redis.auth.secretKey }}
+            # Picked up by redis-cli in the probes.
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "visit-counter.redisSecretName" $root }}
+                  key: {{ $root.Values.redis.auth.secretKey }}
+          ports:
+            - name: redis
+              containerPort: {{ .port }}
+              protocol: TCP
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -p {{ .port }} ping | grep -q PONG"]
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -p {{ .port }} ping | grep -q PONG"]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -p {{ .port }} ping | grep -q PONG"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          lifecycle:
+            preStop:
+              exec:
+                # Flush the AOF cleanly before the pod goes away.
+                command: ["sh", "-c", "redis-cli -p {{ .port }} shutdown || true"]
+          resources:
+            {{- toYaml $root.Values.redis.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/redis
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "visit-counter.fullname" $root }}-redis
+        - name: tmp
+          emptyDir:
+            sizeLimit: 8Mi
+        {{- if not $root.Values.redis.persistence.enabled }}
+        # Throwaway environments only: counts are lost when the pod restarts.
+        - name: data
+          emptyDir: {}
+        {{- end }}
+  {{- if $root.Values.redis.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if $root.Values.redis.persistence.storageClassName }}
+        storageClassName: {{ $root.Values.redis.persistence.storageClassName | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $root.Values.redis.persistence.size | quote }}
+  {{- end }}
+{{- end }}
