@@ -157,3 +157,54 @@ chaos: ## Kill a pod mid-buffer and prove no visits are lost
 	@sleep 3
 	@echo "--- count after the kill (expect 40)"
 	@curl -fsS $(BASE_URL)/api/v1/counter/visits/chaos; echo
+
+# ---------------------------------------------------------------- monitoring
+
+LOAD_REQUESTS ?= 400
+
+# kind does not expose etcd, the scheduler, the controller manager or
+# kube-proxy where their default ServiceMonitors look, so those scrape targets
+# are turned off; otherwise the alert list is permanently red.
+.PHONY: monitoring
+monitoring: ## Install Prometheus + Grafana (release name must be "monitoring")
+	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+	helm repo update prometheus-community
+	helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+		--namespace monitoring --create-namespace \
+		--set grafana.adminPassword=admin \
+		--set prometheus.prometheusSpec.retention=6h \
+		--set prometheus.prometheusSpec.scrapeInterval=15s \
+		--set kubeEtcd.enabled=false \
+		--set kubeControllerManager.enabled=false \
+		--set kubeScheduler.enabled=false \
+		--set kubeProxy.enabled=false \
+		--wait --timeout 10m
+	@echo "installed. now: make deploy (to create the ServiceMonitor and rules)"
+
+.PHONY: grafana
+grafana: ## Open Grafana (admin / admin)
+	@echo "http://localhost:3000  admin / admin  -> dashboard 'Visit Counter'"
+	kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80
+
+.PHONY: prometheus
+prometheus: ## Open Prometheus (targets, rules, alerts)
+	@echo "http://localhost:9090/targets  and  /alerts"
+	kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090
+
+.PHONY: traffic
+traffic: ## Generate traffic so the dashboard and SLO have something to show
+	@echo "sending $(LOAD_REQUESTS) write+read pairs across 20 pages"
+	@for i in $$(seq 1 $(LOAD_REQUESTS)); do \
+		p=load-$$(( RANDOM % 20 )); \
+		curl -fsS -X POST $(BASE_URL)/api/v1/counter/visit/$$p >/dev/null; \
+		curl -fsS $(BASE_URL)/api/v1/counter/visits/$$p >/dev/null; \
+	done
+	@echo "done"
+
+.PHONY: slo
+slo: ## Print the SLI, error budget burn and p95 (starts its own port-forward)
+	@python3 scripts/observe.py slo
+
+.PHONY: alerts
+alerts: ## Show this application's alert rules and whether any are firing
+	@python3 scripts/observe.py alerts

@@ -13,7 +13,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from .api.v1.api import api_router
 from .core.config import settings
 from .core.logging import configure_logging, request_id_ctx
-from .core.metrics import BUILD_INFO
+from .core.metrics import BUILD_INFO, HTTP_DURATION, HTTP_REQUESTS
 from .core.redis_manager import RedisManager
 from .services.visit_counter import VisitCounterService
 
@@ -72,6 +72,31 @@ if settings.cors_origins:
     )
 
 
+def _route_template(request: Request) -> str:
+    """The matched route pattern, never the concrete path.
+
+    page_id comes from the caller, so labelling by the real path would let
+    anyone create unlimited series. Rebuilt from the matched path params
+    because FastAPI's route objects change shape between versions.
+    """
+    if request.scope.get("route") is None:
+        return "unmatched"
+
+    params = request.path_params or {}
+    if params:
+        path = request.url.path
+        for name, value in params.items():
+            path = path.replace(str(value), "{" + name + "}", 1)
+        return path
+
+    for attr in ("path_format", "path"):
+        value = getattr(request.scope["route"], attr, None)
+        if isinstance(value, str) and value:
+            return value
+
+    return request.url.path
+
+
 @app.middleware("http")
 async def request_context(request: Request, call_next):
     """Tag logs and the response with a request id, and write the access log."""
@@ -95,6 +120,10 @@ async def request_context(request: Request, call_next):
 
     duration = time.perf_counter() - started
     response.headers["x-request-id"] = request_id
+
+    route = _route_template(request)
+    HTTP_REQUESTS.labels(method=request.method, route=route, status=str(response.status_code)).inc()
+    HTTP_DURATION.labels(method=request.method, route=route).observe(duration)
 
     if request.url.path not in ("/metrics", "/healthz"):
         logger.info(

@@ -76,3 +76,18 @@ BUILD_INFO = Gauge(
     "Build identity of the running process. Always 1; read the labels.",
     ["version", "git_sha"],
 )
+
+HTTP_REQUESTS = Counter(
+    "visit_counter_http_requests_total",
+    "HTTP requests served.",
+    ["method", "route", "status"],
+)
+
+HTTP_DURATION = Histogram(
+    "visit_counter_http_request_duration_seconds",
+    "End-to-end HTTP request latency.",
+    ["method", "route"],
+    # 0.2 is an explicit edge: the SLO query reads that bucket directly
+    # rather than interpolating between two.
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1.0, 2.5, 5.0),
+)

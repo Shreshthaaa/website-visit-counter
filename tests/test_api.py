@@ -59,3 +59,24 @@ def test_metrics_exposes_application_series(client):
     assert "visit_counter_visits_recorded_total" in body
     assert "visit_counter_buffer_depth" in body
     assert 'visit_counter_build_info{git_sha="testsha",version="test"}' in body
+
+
+def test_http_metrics_use_the_route_template(client):
+    client.post("/api/v1/counter/visit/page-one")
+    client.post("/api/v1/counter/visit/page-two")
+    body = client.get("/metrics").text
+
+    # Both requests must collapse onto one series. Labelling by the raw path
+    # would let a caller create unbounded cardinality.
+    assert 'route="/api/v1/counter/visit/{page_id}"' in body
+    assert "page-one" not in body
+    assert "page-two" not in body
+    assert "visit_counter_http_request_duration_seconds_bucket" in body
+
+
+def test_unmatched_paths_do_not_create_series(client):
+    client.get("/no/such/route/xyz123")
+    body = client.get("/metrics").text
+
+    assert 'route="unmatched"' in body
+    assert "xyz123" not in body

@@ -102,3 +102,30 @@ redis:
     save 900 1
     maxmemory-policy noeviction
 
+
+monitoring:
+  # Must match the Helm release name of kube-prometheus-stack: its default
+  # selectors only match objects carrying this as a `release` label.
+  prometheusRelease: monitoring
+
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    scrapeTimeout: 10s
+
+  prometheusRule:
+    enabled: true
+
+  dashboard:
+    enabled: true
+    label: grafana_dashboard
+
+  slo:
+    # latencyBucket must be an actual bucket edge in HTTP_DURATION, or the
+    # SLI query interpolates instead of reading a real boundary.
+    objective: 0.99
+    latencyBucket: "0.2"
+
+  alerts:
+    # Unflushed visits in a single pod before this counts as a backlog.
+    bufferDepthThreshold: 1000

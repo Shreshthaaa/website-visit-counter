@@ -23,3 +23,6 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S105", "S106"]
+# Operator tooling, not shipped in the image: it deliberately shells out to
+# kubectl and talks to a hardcoded localhost port-forward.
+"scripts/*" = ["S310", "S603", "S607"]
