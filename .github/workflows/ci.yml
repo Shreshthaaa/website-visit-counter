@@ -78,7 +78,9 @@ jobs:
             --namespace visit-counter \
             --set image.tag=${{ github.sha }} \
             | kubeconform -strict -summary -kubernetes-version 1.29.0 \
-                -schema-location default -verbose
+                -schema-location default \
+                -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+                -verbose
 
   image:
     name: Build, scan and publish
