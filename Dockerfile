@@ -44,6 +44,18 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=app:app app ./app
 
+# pip, setuptools and wheel are build tooling; nothing is installed at
+# runtime. Removing them also removes the packages setuptools vendors, which
+# accounted for 4 of the 7 HIGH findings in the first image scan.
+RUN for d in /opt/venv/lib/python3.11/site-packages \
+             /usr/local/lib/python3.11/site-packages; do \
+      [ -d "$d" ] || continue; \
+      rm -rf "$d/pip" "$d/setuptools" "$d/wheel" "$d/pkg_resources" \
+             "$d/_distutils_hack" "$d/distutils-precedence.pth"; \
+      find "$d" -maxdepth 1 \( -name 'pip-*' -o -name 'setuptools-*' \
+           -o -name 'wheel-*' -o -name 'pkg_resources-*' \) -exec rm -rf {} + ; \
+    done
+
 USER 10001:10001
 
 EXPOSE 8000
